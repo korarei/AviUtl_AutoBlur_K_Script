@@ -22,7 +22,7 @@ jobs:
       run: |
         cp *.md script
         cp LICENSE script
-        zip -r -q -@ AutoBlur_K_${{ github.ref_name }}.zip ${{ github.workspace }}/script
+        zip -r -q -@ AutoBlur_K_${{ github.ref_name }}.zip ./script
 
     - name: Create release note
       run: |
@@ -43,6 +43,6 @@ jobs:
     - name: Create release
       uses: softprops/action-gh-release@v2
       with:
-        name: ランダム丸配置_${{ github.ref_name }}
+        name: AutoBlur_K_${{ github.ref_name }}
         files: '*.zip'
         body_path: ReleaseNote.txt
