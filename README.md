@@ -16,11 +16,11 @@
 2つ存在する
 - sAngle (Shutter Angle)
 
-ブラーの長さを指定する
+    ブラーの長さを指定する
 
 - sPhase (Shutter Phase)
 
-ブラーの位置を指定する
+    ブラーの位置を指定する
 
 ## その他の設定項目
 1. Display Original
