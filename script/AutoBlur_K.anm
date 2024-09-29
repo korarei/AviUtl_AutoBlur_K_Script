@@ -1,11 +1,11 @@
 --track0:sAngle,0,720,180
 --track1:sPhase,-360,360,-90
 --check0:Display Original,0
---dialog:Consider Script/chk,_1=0;Enable Dir Blur/chk,_2=1;Enable Rad Blur/chk,_3=1;Enable Rot Blur/chk,_4=0;└Relative Path,_5=true;└Dll Path,_6="..\\";└Param,_7={1, 0, 1, 1};Keep Size,_8=false;Length,_9=0.95;
+--dialog:Consider Script/chk,_1=0;Enable Dir Blur/chk,_2=1;Enable Rad Blur/chk,_3=1;Enable Rot Blur/chk,_4=0;└Relative Path,_5=true;└Mod Path,_6="..\\";└Param,_7={1, 0, 1, 1};Keep Size,_8=false;Amount,_9=0.95;
 
 --サイズが0ならここで終わり
-local w0, h0 = obj.getpixel()
-if (w0 * h0 == 0) then
+local w, h = obj.getpixel()
+if (w * h == 0) then
     return
 end
 
@@ -18,24 +18,155 @@ local chk_directional_blur = _2 == 1 _2 = nil
 local chk_radial_blur = _3 == 1 _3 = nil
 local chk_rot_blur = _4 == 1 _4 = nil
 local chk_relative_path = _5 _5 = nil
-local dll_path = _6 _6 = nil
+local mod_path = _6 _6 = nil
 local rot_blur_param = _7 _7 = nil
-local rot_blur_type = rot_blur_param[1]
-local reduce_angle_resolution = rot_blur_param[2]
-local quality_mode_display = rot_blur_param[3] == 1
-local quality_mode_output = rot_blur_param[4] == 1
 local keep_size = _8 _8 = nil
 local keep_size_num = keep_size and 1 or 0
-local length = _9 _9 = nil
+local amount = _9 _9 = nil
 
 --定数
-local d_z = 1 * 1024 / (1024 + obj.getvalue("z") + obj.oz)
-local amount_r = 0.02 * length * 100 / (obj.getvalue("zoom") * obj.zoom * d_z)
-local amount_s = 0.035 * length * 100 / (obj.getvalue("zoom") * obj.zoom * d_z)
-local amount_z = 0.00045 * length * 100 / (obj.getvalue("zoom") * obj.zoom * d_z)
-local amount_theta = 0.05 * length
+local apparent_zoom = 1 * 1024 / (1024 + obj.getvalue("z") + obj.oz)
+local adjust = math.max(obj.getvalue("zoom") * obj.zoom * apparent_zoom / 100, 1e-10)
 local dt = 1 / obj.framerate
 local id = obj.index
+
+--関数
+--スクリプトによって変化するパラメータをコピーする関数
+local function copy_param(tbl, id)
+    tbl[id] = {
+        ox = obj.ox,
+        oy = obj.oy,
+        oz = obj.oz,
+        zoom = obj.zoom,
+        rz = obj.rz,
+        time = obj.time
+    }
+end
+
+--方向ブラーをかける関数
+--on/off、1frame前の時間(t0)、スクリプトを考慮するか(chk_consider_script)、1frame前のデータが入ったtable(tbl)、tableのid(個別オブジェクトのインデックス)(id)、シャッターアングル(shutter_angle)、シャッターフェーズ(shutter_phase)、ブラーのamountの係数(amount)、サイズ固定[1/0](keep_size)、z座標を変化させたときの見かけのサイズ(apparent_zoom)
+local function directional_blur(chk_directional_blur, t0, chk_consider_script, tbl, id, shutter_angle, shutter_phase, amount, keep_size, adjust, rz)
+    --パラメータから変位を得る
+    local dx = obj.getvalue("x") - obj.getvalue("x", t0)
+    local dy = obj.getvalue("y") - obj.getvalue("y", t0)
+    --相対座標による変位を得る
+    if (chk_consider_script) then
+        dx = dx + obj.ox - tbl[id].ox
+        dy = dy + obj.oy - tbl[id].oy
+    end
+    --変位ベクトルを極座標化(位置から求めたラジアンってことでrad_pos。いい名前あったら教えて)
+    local dr, rad_pos = math.sqrt(dx * dx + dy * dy), math.atan2(dy, dx)
+
+    --ブラーをかける
+    if chk_directional_blur then
+        obj.effect("方向ブラー", "範囲", amount * math.abs(dr) * shutter_angle / (720 * adjust), "角度", 90 + math.deg(rad_pos) - obj.rz - rz, "サイズ固定", keep_size)
+    end
+
+    --中心座標の変化量を返す
+    return dr * shutter_angle * (shutter_phase + 90) / (64800 * adjust), rad_pos
+end
+
+--方向ブラーをかける関数
+--on/off、1frame前の時間(t0)、スクリプトを考慮するか(chk_consider_script)、1frame前のデータが入ったtable(tbl)、tableのid(個別オブジェクトのインデックス)(id)、シャッターアングル(shutter_angle)、シャッターフェーズ(shutter_phase)、ブラーのamountの係数(amount)、サイズ固定[1/0](keep_size)、z座標を変化させたときの見かけのサイズ(apparent_zoom)
+local function radial_blur(chk_radial_blur, t0, chk_consider_script, tbl, id, shutter_angle, shutter_phase, amount, keep_size, cr, rad_pos, rz)
+    --パラメータから変位を求める。zの変化は遠近法で見かけのサイズ変化量に変化させる。
+    local s1, s0 = 0, 0
+    if (chk_consider_script) then
+        s1, s0 = obj.getvalue("zoom") * obj.zoom * 1024 / (1024 + obj.getvalue("z") + obj.oz), obj.getvalue("zoom", t0) * tbl[id].zoom * 1024 / (1024 + obj.getvalue("z", t0) + tbl[id].oz)
+    else
+        s1, s0 = obj.getvalue("zoom") * 1024 / (1024 + obj.getvalue("z")), obj.getvalue("zoom", t0) * 1024 / (1024 + obj.getvalue("z", t0))
+    end
+    local ds = s1 - s0
+
+    --ブラーをかける
+    if chk_radial_blur then
+        obj.effect("放射ブラー", "範囲", amount * (1 - math.min(s1, s0) / math.max(s1, s0)) * shutter_angle * 10 / 36, "X", obj.cx - cr * math.cos(rad_pos - math.rad(obj.rz)), "Y", obj.cy - cr * math.sin(rad_pos - math.rad(obj.rz)), "サイズ固定", keep_size)
+    end
+
+    --拡大率と中心座標を返す
+    local d_zoom = chk_consider_script and obj.getvalue("zoom") * obj.zoom - obj.getvalue("zoom", t0) * tbl[id].zoom or obj.getvalue("zoom") - obj.getvalue("zoom", t0)
+    local dz = chk_consider_script and obj.getvalue("z") + obj.oz - obj.getvalue("z", t0) - tbl[id].oz or obj.getvalue("z") - obj.getvalue("z", t0)
+    local zoom, cz
+    if (ds > 0) then
+        zoom = d_zoom * shutter_angle * shutter_phase / (64800 * obj.zoom * obj.getvalue("zoom")) + 1
+        cz = dz * shutter_angle * (shutter_phase + 90) / 32400
+    else
+        zoom = d_zoom * shutter_angle * (shutter_phase + 180) / (64800 * obj.zoom * obj.getvalue("zoom")) + 1
+        cz = dz * shutter_angle * (shutter_phase + 180) / 64800
+    end
+
+    return zoom, cz
+end
+
+--回転ブラーをかける関数
+--on/off、1frame前の時間(t0)、スクリプトを考慮するか(chk_consider_script)、1frame前のデータが入ったtable(tbl)、tableのid(個別オブジェクトのインデックス)(id)、シャッターアングル(shutter_angle)、シャッターフェーズ(shutter_phase)、ブラーのamountの係数(amount)、サイズ固定[1/0](keep_size)、サイズ(w, h)、モジュールのパスの種類(chk_relative_path)、モジュールのパス(mod_path)、回転ブラーのパラメータ(rot_blur_param)
+local function rotational_blur(chk_rot_blur, t0, chk_consider_script, tbl, id, shutter_angle, shutter_phase, amount, keep_size, w, h, chk_relative_path, mod_path, rot_blur_param)
+    --パラメータまたはテーブルから変位を得る
+    local d_deg = chk_consider_script and obj.rz - tbl[id].rz or obj.getvalue("rz") - obj.getvalue("rz", t0)
+
+    if chk_rot_blur then
+        --サイズ固定出ないときの正しいサイズを計算
+        local a, b = w / 2 + math.abs(obj.cx), h / 2 + math.abs(obj.cy) --a,bの良い名称思いつかなかった
+        local r = math.sqrt(a * a + b * b)
+        if not keep_size then
+            local add_x, add_y = math.ceil(r - w / 2 + 1), math.ceil(r - h / 2 + 1)
+            obj.effect("領域拡張", "上", add_y, "下", add_y, "右", add_x, "左", add_x)
+        end
+
+        --moduleはscriptフォルダ直下も調べる
+        package.cpath = package.cpath..";"..obj.getinfo("script_path"):gsub("[^\\]+\\$", "?.dll")
+        package.path = package.path..";"..obj.getinfo("script_path"):gsub("[^\\]+\\$", "?.lua")
+        --module pathがluaなのかdllなのか判定
+        local lua_ext = ".lua"
+        local dll_ext = ".dll"
+
+        if (string.sub(mod_path, -string.len(lua_ext)) == lua_ext) then
+            --luaパス追加
+            if (chk_relative_path) then
+                package.path = package.path..";"..obj.getinfo("script_path")..mod_path
+            else
+                package.path = package.path..";"..mod_path
+            end
+        elseif (string.sub(mod_path, -string.len(dll_ext)) == dll_ext) then
+            --dllパス追加
+            if (chk_relative_path) then
+                package.cpath=package.cpath..";"..obj.getinfo("script_path")..mod_path
+            else
+                package.cpath=package.cpath..";"..mod_path
+            end
+        end
+
+        local rot_blur_type = rot_blur_param[1]
+        if (rot_blur_type == 1) then
+            local reduce_angle_resolution = rot_blur_param[2]
+            local quality_mode_display = rot_blur_param[3] == 1
+            local quality_mode_output = rot_blur_param[4] == 1
+
+            local data, width, height = obj.getpixeldata()
+            local chk, T_RotBlur_Module = pcall(require, "T_RotBlur_Module")
+            if (chk) then
+                local is_quality_mode = (not obj.getinfo("saving") and quality_mode_display) or (obj.getinfo("saving") and quality_mode_output)
+                local rot_blur = is_quality_mode and T_RotBlur_Module.RotBlur_S or T_RotBlur_Module.RotBlur_L
+                rot_blur(data, width, height, amount * math.abs(d_deg) * shutter_angle / 720, obj.cx, obj.cy, 0, reduce_angle_resolution)
+                obj.putpixeldata(data)
+            else
+                print("[AutoBlur_K.anm] T_RotBlur_Module.dllが見つかりません。回転ブラーのみoffにします。")
+            end
+        elseif (rot_blur_type == 2) then
+            local quality = rot_blur_param[2]
+            local reload = rot_blur_param[3] == 1
+
+            local chk, RotBlur_M = pcall(require, "RotBlur_M")
+            if (chk) then
+                RotBlur_M.RotBlur_M(obj.cx, obj.cy, math.rad(amount * math.abs(d_deg) * shutter_angle / 720), 0, true, quality, reload)
+            else
+                print("[AutoBlur_K.anm] RotBlur_M.luaが見つかりません。回転ブラーのみoffにします。")
+            end
+        end
+    end
+
+    return d_deg * shutter_angle * (shutter_phase + 90) / 64800, d_deg
+end
 
 --グローバル空間に配列を用意する
 if (chk_consider_script and (_ABK_P == nil)) then
@@ -43,14 +174,7 @@ if (chk_consider_script and (_ABK_P == nil)) then
 end
 --もし配列の中身がnilなら値を格納する
 if (chk_consider_script and ((_ABK_P[id] == nil) or (obj.frame == 0))) then
-    _ABK_P[id] = {
-        ox = obj.ox,
-        oy = obj.oy,
-        oz = obj.oz,
-        zoom = obj.zoom,
-        rz = obj.rz,
-        time = obj.time
-        }
+    copy_param(_ABK_P, id)
 end
 --警告文でも流しとく
 if (chk_consider_script and id == 0 and (obj.time - _ABK_P[id].time) < 0) then
@@ -63,143 +187,39 @@ end
 --負の時間（スタート時）およびdt == 0は動作しない
 local t0 = obj.time - dt
 if (t0 > 0 and dt ~= 0) then
-    --z軸まわりに関する回転方向の速度ベクトルv_thetaと相対回転量orzの計算
-    local d_theta = chk_consider_script and obj.rz - _ABK_P[id].rz or obj.getvalue("rz") - obj.getvalue("rz", t0)
-    local v_theta = d_theta / dt
-    local orz = chk_rot_blur and d_theta * shutter_angle * (shutter_phase + 90) / 64800 or 0
-    local rz_pre = math.rad(obj.rz)
-
-    --スケールの変更やz方向への動作によって生じる速度ベクトルvsとvzおよび相対移動量ozと相対拡大量osの計算
-    local ds = chk_consider_script and obj.getvalue("zoom") * obj.zoom - obj.getvalue("zoom", t0) * _ABK_P[id].zoom or obj.getvalue("zoom") - obj.getvalue("zoom", t0)
-    local dz = obj.getvalue("z") - obj.getvalue("z", t0)
-
-    if (chk_consider_script) then
-        dz = dz + obj.oz - _ABK_P[id].oz
-    end
-
-    local vs = ds / dt
-    local vz = dz / dt
-    local os = 1
-    local oz = 0
-    if (chk_radial_blur) then
-        if (vs > 0) then
-            os = ds * shutter_angle * shutter_phase / (64800 * obj.zoom * obj.getvalue("zoom")) + 1
-        else
-            os = ds * shutter_angle * (shutter_phase + 180) / (64800 * obj.zoom * obj.getvalue("zoom")) + 1
-        end
-        if (vz < 0) then
-            oz = -dz * shutter_angle / 360
-        end
-        oz = oz + dz * shutter_angle * (shutter_phase + 180) / 64800
-    end
-
-    --xy平面でのオブジェクトの速度ベクトルvrと相対移動量ox, oyそして中心座標cx, cyの計算
-    local dx = obj.getvalue("x") - obj.getvalue("x", t0)
-    local dy = obj.getvalue("y") - obj.getvalue("y", t0)
-
-    if (chk_consider_script) then
-        dx = dx + obj.ox - _ABK_P[id].ox
-        dy = dy + obj.oy - _ABK_P[id].oy
-    end
-
-    local dr = math.sqrt(dx * dx + dy * dy)
-    local vr = dr / dt
-    local ox = chk_directional_blur and dx * shutter_angle * (shutter_phase + 90) / 64800 or 0
-    local oy = chk_directional_blur and dy * shutter_angle * (shutter_phase + 90) / 64800 or 0
-    local cx = ox * math.cos(rz_pre) + oy * math.sin(rz_pre)
-    local cy = -ox * math.sin(rz_pre) + oy * math.cos(rz_pre)
-    cx = cx * 100  / (obj.getvalue("zoom") * obj.zoom * d_z)
-    cy = cy * 100  / (obj.getvalue("zoom") * obj.zoom * d_z)
-
-    if (chk_consider_script) then
-        _ABK_P[id] = {
-            ox = obj.ox,
-            oy = obj.oy,
-            oz = obj.oz,
-            zoom = obj.zoom,
-            rz = obj.rz,
-            time = obj.time
-            }
-    end
-
     --オリジナルを表示するために、キャッシュを取る
     if (chk_display_original) then
         obj.copybuffer("cache:pre", "obj")
     end
 
-    --回転ブラー
-    if (chk_rot_blur) then
-        --ブラーがカットされないように領域を拡張する
-        local a, b = w0 / 2 + math.abs(obj.cx), h0 / 2 + math.abs(obj.cy)
-        local r = math.sqrt(a * a + b * b)
-        if not keep_size then
-            local add_x, add_y = math.ceil(r - w0 / 2 + 1), math.ceil(r - h0 / 2 + 1)
-            obj.effect("領域拡張", "上", add_y, "下", add_y, "右", add_x, "左", add_x)
-        end
-        local data, w, h = obj.getpixeldata()
-        --dllはscriptフォルダ直下も調べる
-        package.cpath = package.cpath..";"..obj.getinfo("script_path"):gsub("[^\\]+\\$", "?.dll")
-        --dll pathを追加
-        if (chk_relative_path) then
-            package.cpath=package.cpath..";"..obj.getinfo("script_path")..dll_path
-        else
-            package.cpath=package.cpath..";"..dll_path
-        end
-    
-        local chk, T_RotBlur_Module = pcall(require, "T_RotBlur_Module")
-        if (chk) then
-            local is_quality_mode = (not obj.getinfo("saving") and quality_mode_display) or (obj.getinfo("saving") and quality_mode_output)
-            local rot_blur = is_quality_mode and T_RotBlur_Module.RotBlur_S or T_RotBlur_Module.RotBlur_L
-            rot_blur(data, w, h, amount_theta * math.abs(v_theta) * shutter_angle / 360, obj.cx, obj.cy, 0, reduce_angle_resolution)
-            obj.putpixeldata(data)
-            --位置調整
-            obj.rz = obj.rz + orz
-        else
-            --見つからなかった場合、コンソールにメッセージを流して回転ブラーのみ実行しない。
-            print("[AutoBlur_K.anm] T_RotBlur_Module.dllが見つかりません。回転ブラーのみoffにします。")
-        end
-    end
+    local cx, cy = obj.cx, obj.cy
+    local rz = rotational_blur(chk_rot_blur, t0, chk_consider_script, _ABK_P, id, shutter_angle, shutter_phase, amount, keep_size, w, h, chk_relative_path, mod_path, rot_blur_param)
+    local cr, rad_pos = directional_blur(chk_directional_blur, t0, chk_consider_script, _ABK_P, id, shutter_angle, shutter_phase, amount, keep_size_num, adjust, rz)
+    local zoom, cz = radial_blur(chk_radial_blur, t0, chk_consider_script, _ABK_P, id, shutter_angle, shutter_phase, amount, keep_size_num, cr, rad_pos, rz)
+    --local rz = rotational_blur(chk_rot_blur, t0, chk_consider_script, _ABK_P, id, shutter_angle, shutter_phase, amount, keep_size, w, h, chk_relative_path, mod_path, rot_blur_param)
 
-    --放射ブラー
-    local dcx_pre, dcy_pre, zoom_pre = obj.cx, obj.cy, obj.zoom
-    if (chk_radial_blur) then
-        --スケールおよびz方向の移動については放射ブラーでモーションブラーを再現する
-        obj.effect("放射ブラー", "範囲", (amount_s  * math.abs(vs) + amount_z * math.abs(vz)) * shutter_angle / 360, "X", obj.cx, "Y", obj.cy, "サイズ固定", keep_size_num)
-        --位置調整
-        obj.zoom = obj.zoom * math.max(os, 0)
-        obj.cz = obj.cz - oz
-    end
-    --放射ブラーによって変わった中心座標量を計算
-    local dcx_tmp, dcy_tmp = (obj.cx - dcx_pre) * obj.getvalue("zoom") * zoom_pre * d_z / 100, (obj.cy - dcy_pre) * obj.getvalue("zoom") * zoom_pre * d_z / 100
-    local dcx, dcy = dcx_tmp * math.cos(rz_pre) - dcy_tmp * math.sin(rz_pre), dcx_tmp * math.sin(rz_pre) + dcy_tmp * math.cos(rz_pre)
+    local dcx, dcy = obj.cx - cx, obj.cy - cy
+    local dcr = math.sqrt(dcx * dcx + dcy * dcy) * adjust
+    local rad_center_pos = math.atan2(dcy, dcx)
 
-    --方向ブラー
-    if (chk_directional_blur) then
-        --xy平面での移動は方向ブラーでモーションブラーを再現
-        obj.effect("方向ブラー", "範囲", amount_r * math.abs(vr) * shutter_angle / 360, "角度", 90 + math.deg(math.atan2(dy, dx)) - obj.rz, "サイズ固定", keep_size_num)
-        --位置調整
-        obj.cx = obj.cx - cx
-        obj.cy = obj.cy - cy
+    if (chk_consider_script) then
+        copy_param(_ABK_P, id)
     end
+local a = obj.rz
+    obj.zoom = obj.zoom * math.max(zoom, 0)
+    obj.rz = obj.rz + rz
+    obj.cx, obj.cy, obj.cz = obj.cx - cr * math.cos(rad_pos - math.rad(obj.rz)), obj.cy - cr * math.sin(rad_pos - math.rad(obj.rz)), obj.cz - cz
 
-    --オリジナルをobj.draw()でフレームバッファに表示する。オリジナルはこのスクリプト以降のエフェクトの影響を受けないはず
     if (chk_display_original) then
         --このスクリプト以降のエフェクトはブラーにかける
         obj.effect()
         obj.draw()
         obj.copybuffer("obj", "cache:pre")
-        obj.draw(-ox + dcx, -oy + dcy, -oz, 1 / math.max(os, 0.00000001), 1, 0, 0, -orz)
+        obj.draw(-cr * math.cos(rad_pos) * adjust + dcr * math.cos(rad_center_pos + math.rad(obj.rz - rz)), -cr * math.sin(rad_pos) * adjust + dcr * math.sin(rad_center_pos + math.rad(obj.rz - rz)), -cz, 1 / math.max(zoom, 1e-10), 1, 0, 0, -rz)
     end
 else
     if (chk_consider_script) then
-        _ABK_P[id] = {
-            ox = obj.ox,
-            oy = obj.oy,
-            oz = obj.oz,
-            zoom = obj.zoom,
-            rz = obj.rz,
-            time = obj.time
-            }
+        copy_param(_ABK_P, id)
     end
 end
 
