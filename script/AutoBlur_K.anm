@@ -1,7 +1,7 @@
 --track0:sAngle,0,720,180
 --track1:sPhase,-360,360,-90
 --check0:Display Original,0
---dialog:Consider Script/chk,_1=0;Enable Dir Blur/chk,_2=1;Enable Rad Blur/chk,_3=1;Enable Rot Blur/chk,_4=0;└Relative Path,_5=true;└Mod Path,_6="..\\";└Param,_7={1, 0, 1, 1};Keep Size,_8=false;Amount,_9=0.95;
+--dialog:Consider Script/chk,_1=0;Enable Dir Blur/chk,_2=1;Enable Rad Blur/chk,_3=1;Enable Rot Blur/chk,_4=0;└Relative Path,_5=true;└Mod Path,_6="..\\";└Param,_7={2, 256, 0};Keep Size,_8=false;Amount,_9=0.95;
 
 --サイズが0ならここで終わり
 local w, h = obj.getpixel()
@@ -45,7 +45,7 @@ end
 
 --方向ブラーをかける関数
 --on/off、1frame前の時間(t0)、スクリプトを考慮するか(chk_consider_script)、1frame前のデータが入ったtable(tbl)、tableのid(個別オブジェクトのインデックス)(id)、シャッターアングル(shutter_angle)、シャッターフェーズ(shutter_phase)、ブラーのamountの係数(amount)、サイズ固定[1/0](keep_size)、拡大率による補正(adjust)、回転ブラーによる移動量rz, 回転の移動量d_deg
-local function directional_blur(chk_directional_blur, t0, chk_consider_script, tbl, id, shutter_angle, shutter_phase, amount, keep_size, adjust, rz, d_deg)
+local function directional_blur(chk_directional_blur, t0, chk_consider_script, tbl, id, shutter_angle, shutter_phase, amount, keep_size, adjust, rz)
     --パラメータから変位を得る
     local dx = obj.getvalue("x") - obj.getvalue("x", t0)
     local dy = obj.getvalue("y") - obj.getvalue("y", t0)
@@ -61,12 +61,24 @@ local function directional_blur(chk_directional_blur, t0, chk_consider_script, t
     --中心座標を考慮したdx、dyを求め、その角度を得る。
     local r = math.sqrt((-obj.cx) * (-obj.cx) + (-obj.cy) * (-obj.cy))
     local theta = math.atan2(-obj.cy, -obj.cx)
-    local apparent_dx, apparent_dy = r * math.cos(theta + math.rad(d_deg)) + obj.cx + dx, r * math.sin(theta + math.rad(d_deg)) + obj.cy + dy
+    local scale1, scale0 = 0, 0
+    if (chk_consider_script) then
+        scale1, scale0 = obj.getvalue("zoom") / 100 * obj.zoom * 1024 / (1024 + obj.getvalue("z") + obj.oz), obj.getvalue("zoom", t0) / 100 * tbl[id].zoom * 1024 / (1024 + obj.getvalue("z", t0) + tbl[id].oz)
+    else
+        scale1, scale0 = obj.getvalue("zoom") / 100 * 1024 / (1024 + obj.getvalue("z")), obj.getvalue("zoom", t0) / 100 * 1024 / (1024 + obj.getvalue("z", t0))
+    end
+
+    local rz1 = chk_consider_script and obj.rz or obj.getvalue("rz")
+    local rz0 = chk_consider_script and tbl[id].rz or obj.getvalue("rz", t0)
+
+    local apparent_dx = scale1 * r * math.cos(theta + math.rad(rz1)) - scale0 * r * math.cos(theta + math.rad(rz0)) + dx
+    local apparent_dy = scale1 * r * math.sin(theta + math.rad(rz1)) - scale0 * r * math.sin(theta + math.rad(rz0)) + dy
+
     local apparent_rad_pos = math.atan2(apparent_dy, apparent_dx)
 
     --ブラーをかける
     if chk_directional_blur then
-        obj.effect("方向ブラー", "範囲", amount * math.abs(dr) * shutter_angle / (720 * adjust), "角度", 90 + math.deg(apparent_rad_pos) - obj.rz - rz + d_deg, "サイズ固定", keep_size)
+        obj.effect("方向ブラー", "範囲", amount * math.abs(dr) * shutter_angle / (720 * adjust), "角度", 90 + math.deg(apparent_rad_pos) - obj.rz - rz, "サイズ固定", keep_size)
     end
 
     --中心座標の変化量を返す
@@ -75,7 +87,7 @@ end
 
 --方向ブラーをかける関数
 --on/off、1frame前の時間(t0)、スクリプトを考慮するか(chk_consider_script)、1frame前のデータが入ったtable(tbl)、tableのid(個別オブジェクトのインデックス)(id)、シャッターアングル(shutter_angle)、シャッターフェーズ(shutter_phase)、ブラーのamountの係数(amount)、サイズ固定[1/0](keep_size)、z座標を変化させたときの見かけのサイズ(apparent_zoom)
-local function radial_blur(chk_radial_blur, t0, chk_consider_script, tbl, id, shutter_angle, shutter_phase, amount, keep_size, cr, rad_pos, rz)
+local function radial_blur(chk_radial_blur, t0, chk_consider_script, tbl, id, shutter_angle, shutter_phase, amount, keep_size, cr, rad_pos, rz, d_deg)
     --パラメータから変位を求める。zの変化は遠近法で見かけのサイズ変化量に変化させる。
     local s1, s0 = 0, 0
     if (chk_consider_script) then
@@ -87,7 +99,10 @@ local function radial_blur(chk_radial_blur, t0, chk_consider_script, tbl, id, sh
 
     --ブラーをかける
     if chk_radial_blur then
-        obj.effect("放射ブラー", "範囲", amount * (1 - math.min(s1, s0) / math.max(s1, s0)) * shutter_angle * 10 / 36, "X", obj.cx - cr * math.cos(rad_pos - math.rad(obj.rz)), "Y", obj.cy - cr * math.sin(rad_pos - math.rad(obj.rz)), "サイズ固定", keep_size)
+        cr = (ds > 0) and -cr or cr
+        local d_rad = (ds > 0) and math.rad(d_deg) or math.rad(-d_deg)
+        local cx, cy = obj.cx * math.cos(d_rad) - obj.cy * math.sin(d_rad), obj.cx * math.sin(d_rad) + obj.cy * math.cos(d_rad)
+        obj.effect("放射ブラー", "範囲", amount * (1 - math.min(s1, s0) / math.max(s1, s0)) * shutter_angle * 10 / 36, "X",  cx - cr * math.cos(rad_pos - math.rad(obj.rz + rz)), "Y", cy - cr * math.sin(rad_pos - math.rad(obj.rz + rz)), "サイズ固定", keep_size)
     end
 
     --拡大率と中心座標を返す
@@ -201,13 +216,8 @@ if (t0 > 0 and dt ~= 0) then
 
     local cx, cy = obj.cx, obj.cy
     local rz, d_deg = rotational_blur(chk_rot_blur, t0, chk_consider_script, _ABK_P, id, shutter_angle, shutter_phase, amount, keep_size, w, h, chk_relative_path, mod_path, rot_blur_param)
-    local cr, rad_pos = directional_blur(chk_directional_blur, t0, chk_consider_script, _ABK_P, id, shutter_angle, shutter_phase, amount, keep_size_num, adjust, rz, d_deg)
-    local zoom, cz = radial_blur(chk_radial_blur, t0, chk_consider_script, _ABK_P, id, shutter_angle, shutter_phase, amount, keep_size_num, cr, rad_pos, rz)
-    --local rz = rotational_blur(chk_rot_blur, t0, chk_consider_script, _ABK_P, id, shutter_angle, shutter_phase, amount, keep_size, w, h, chk_relative_path, mod_path, rot_blur_param)
-
-    local dcx, dcy = obj.cx - cx, obj.cy - cy
-    local dcr = math.sqrt(dcx * dcx + dcy * dcy) * adjust
-    local rad_center_pos = math.atan2(dcy, dcx)
+    local cr, rad_pos = directional_blur(chk_directional_blur, t0, chk_consider_script, _ABK_P, id, shutter_angle, shutter_phase, amount, keep_size_num, adjust, rz)
+    local zoom, cz = radial_blur(chk_radial_blur, t0, chk_consider_script, _ABK_P, id, shutter_angle, shutter_phase, amount, keep_size_num, cr, rad_pos, rz, d_deg)
 
     if (chk_consider_script) then
         copy_param(_ABK_P, id)
@@ -222,7 +232,10 @@ if (t0 > 0 and dt ~= 0) then
         obj.effect()
         obj.draw()
         obj.copybuffer("obj", "cache:pre")
-        obj.draw(-cr * math.cos(rad_pos) * adjust + dcr * math.cos(rad_center_pos + math.rad(obj.rz - rz)), -cr * math.sin(rad_pos) * adjust + dcr * math.sin(rad_center_pos + math.rad(obj.rz - rz)), -cz, 1 / math.max(zoom, 1e-10), 1, 0, 0, -rz)
+        obj.cx, obj.cy, obj.cz = cx, cy, obj.cz + cz
+        obj.rz = obj.rz - rz
+        obj.zoom = obj.zoom / math.max(zoom, 1e-10)
+        obj.draw()
     end
 else
     if (chk_consider_script) then
