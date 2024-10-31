@@ -3,12 +3,6 @@
 --check0:Display Original,0
 --dialog:Consider Script/chk,_1=0;Enable Dir Blur/chk,_2=1;Enable Rad Blur/chk,_3=1;Enable Rot Blur/chk,_4=0;└Relative Path,_5=true;└Mod Path,_6="..\\";└Param,_7={2, 256, 0};Keep Size,_8=false;Amount,_9=0.95;v0,_10={true, 0, 0, 0, 0}
 
---サイズが0ならここで終わり
-local w, h = obj.getpixel()
-if (w * h == 0) then
-    return
-end
-
 --パラメータ
 local shutter_angle = obj.track0
 local shutter_phase = obj.track1
@@ -24,6 +18,12 @@ local keep_size = _8 _8 = nil
 local keep_size_num = keep_size and 1 or 0
 local amount = _9 _9 = nil
 local v0 = _10 and _10 or {true, 0, 0, 0, 0} _10 = nil
+
+--サイズが0ならここで終わり
+local w, h = obj.getpixel()
+if (w * h == 0) then
+    return
+end
 
 --定数
 local apparent_zoom = 1 * 1024 / (1024 + obj.getvalue("z") + obj.oz)
@@ -198,16 +198,21 @@ end
 if (chk_consider_script and (_ABK_P == nil)) then
     _ABK_P = {}
 end
+--もし配列にレイヤー情報が無ければ追加する
+if (chk_consider_script and (_ABK_P[obj.layer] == nil)) then
+    _ABK_P[obj.layer] = {}
+end
 --もし配列の中身がnilなら値を格納する
-if (chk_consider_script and (_ABK_P[id] == nil)) then
-    copy_param(_ABK_P, id)
+if (chk_consider_script and (_ABK_P[obj.layer][id] == nil)) then
+    copy_param(_ABK_P[obj.layer], id)
 end
 --警告文でも流しとく
-if (chk_consider_script and id == 0 and (obj.time - _ABK_P[id].time) < 0) then
+if (chk_consider_script and id == 0 and (obj.time - _ABK_P[obj.layer][id].time) < 0) then
     print("[AutoBlur_K.anm] シークバーが右から左に動いています。正常な結果を得られない可能性があります。")
 end
 
 
+local tbl = chk_consider_script and _ABK_P[obj.layer] or nil
 local cx, cy = obj.cx, obj.cy
 local rz, d_deg = 0, 0
 local cr, rad_pos = 0, 0
@@ -219,7 +224,7 @@ end
 
 if (obj.time == 0) then
     if (chk_consider_script) then
-        copy_param(_ABK_P, id)
+        copy_param(tbl, id)
     end
 
     if (v0[1] or not (v0[2] == 0 and v0[3] == 0 and v0[4] == 0 and v0[5] == 0)) then
@@ -236,17 +241,17 @@ if (obj.time == 0) then
             s_n = obj.getvalue("zoom") * obj.zoom * 1024 / (1024 + obj.getvalue("z") + obj.oz) - v0[4] * dt
             d_degree = v0[5] * dt
         end
-        rz, d_deg = rotational_blur(_ABK_P, id, d_degree)
-        cr, rad_pos = directional_blur(_ABK_P, id, rz, dx, dy)
-        zoom, cz = radial_blur(_ABK_P, id, cr, rad_pos, rz, d_deg, s_n)
+        rz, d_deg = rotational_blur(tbl, id, d_degree)
+        cr, rad_pos = directional_blur(tbl, id, rz, dx, dy)
+        zoom, cz = radial_blur(tbl, id, cr, rad_pos, rz, d_deg, s_n)
     end
 else
-    rz, d_deg = rotational_blur(_ABK_P, id)
-    cr, rad_pos = directional_blur(_ABK_P, id, rz)
-    zoom, cz = radial_blur(_ABK_P, id, cr, rad_pos, rz, d_deg)
+    rz, d_deg = rotational_blur(tbl, id)
+    cr, rad_pos = directional_blur(tbl, id, rz)
+    zoom, cz = radial_blur(tbl, id, cr, rad_pos, rz, d_deg)
 
     if (chk_consider_script) then
-        copy_param(_ABK_P, id)
+        copy_param(tbl, id)
     end
 
     obj.zoom = obj.zoom * math.max(zoom, 0)
