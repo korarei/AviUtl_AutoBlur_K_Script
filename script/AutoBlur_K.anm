@@ -26,7 +26,8 @@ if (w * h == 0) then
 end
 
 --定数
-local apparent_zoom = 1 * 1024 / (1024 + obj.getvalue("z") + obj.oz)
+local f = (obj.getoption("camera_mode") == 0) and 1024 or obj.getoption("camera_param").d
+local apparent_zoom = 1 * f / (f + obj.getvalue("z") + obj.oz)
 local adjust = math.max(obj.getvalue("zoom") * obj.zoom * apparent_zoom / 100, 1e-10)
 local dt = 1 / obj.framerate
 local t0 = obj.time - dt
@@ -67,9 +68,9 @@ local function directional_blur(tbl, id, rz, dx_option, dy_option)
     local theta = math.atan2(-obj.cy, -obj.cx)
     local scale1, scale0 = 0, 0
     if (chk_consider_script) then
-        scale1, scale0 = obj.getvalue("zoom") / 100 * obj.zoom * 1024 / (1024 + obj.getvalue("z") + obj.oz), obj.getvalue("zoom", t0) / 100 * tbl[id].zoom * 1024 / (1024 + obj.getvalue("z", t0) + tbl[id].oz)
+        scale1, scale0 = obj.getvalue("zoom") / 100 * obj.zoom * f / (f + obj.getvalue("z") + obj.oz), obj.getvalue("zoom", t0) / 100 * tbl[id].zoom * f / (f + obj.getvalue("z", t0) + tbl[id].oz)
     else
-        scale1, scale0 = obj.getvalue("zoom") / 100 * 1024 / (1024 + obj.getvalue("z")), obj.getvalue("zoom", t0) / 100 * 1024 / (1024 + obj.getvalue("z", t0))
+        scale1, scale0 = obj.getvalue("zoom") / 100 * f / (f + obj.getvalue("z")), obj.getvalue("zoom", t0) / 100 * f / (f + obj.getvalue("z", t0))
     end
 
     local rz1 = chk_consider_script and obj.rz or obj.getvalue("rz")
@@ -90,13 +91,13 @@ local function directional_blur(tbl, id, rz, dx_option, dy_option)
 end
 
 --放射ブラーをかける関数
-local function radial_blur(tbl, id, cr, rad_pos, rz, d_deg, s_n_option)
+local function radial_blur(tbl, id, cr, rad_pos, rz, d_deg, s_n_option, d_zoom_option, dz_option)
     --パラメータから変位を求める。zの変化は遠近法で見かけのサイズ変化量に変化させる。
     local s1, s0 = 0, 0
     if (chk_consider_script) then
-        s1, s0 = obj.getvalue("zoom") * obj.zoom * 1024 / (1024 + obj.getvalue("z") + obj.oz), obj.getvalue("zoom", t0) * tbl[id].zoom * 1024 / (1024 + obj.getvalue("z", t0) + tbl[id].oz)
+        s1, s0 = obj.getvalue("zoom") * obj.zoom * f / (f + obj.getvalue("z") + obj.oz), obj.getvalue("zoom", t0) * tbl[id].zoom * f / (f + obj.getvalue("z", t0) + tbl[id].oz)
     else
-        s1, s0 = obj.getvalue("zoom") * 1024 / (1024 + obj.getvalue("z")), obj.getvalue("zoom", t0) * 1024 / (1024 + obj.getvalue("z", t0))
+        s1, s0 = obj.getvalue("zoom") * f / (f + obj.getvalue("z")), obj.getvalue("zoom", t0) * f / (f + obj.getvalue("z", t0))
     end
     s0 = s_n_option and s_n_option or s0
     local ds = s1 - s0
@@ -110,8 +111,8 @@ local function radial_blur(tbl, id, cr, rad_pos, rz, d_deg, s_n_option)
     end
 
     --拡大率と中心座標を返す
-    local d_zoom = chk_consider_script and obj.getvalue("zoom") * obj.zoom - obj.getvalue("zoom", t0) * tbl[id].zoom or obj.getvalue("zoom") - obj.getvalue("zoom", t0)
-    local dz = chk_consider_script and obj.getvalue("z") + obj.oz - obj.getvalue("z", t0) - tbl[id].oz or obj.getvalue("z") - obj.getvalue("z", t0)
+    local d_zoom = chk_consider_script and obj.getvalue("zoom") * obj.zoom - obj.getvalue("zoom", t0) * tbl[id].zoom or d_zoom_option and d_zoom_option or obj.getvalue("zoom") - obj.getvalue("zoom", t0)
+    local dz = chk_consider_script and obj.getvalue("z") + obj.oz - obj.getvalue("z", t0) - tbl[id].oz or dz_option and dz_option or obj.getvalue("z") - obj.getvalue("z", t0)
     local zoom, cz
     if (ds > 0) then
         zoom = d_zoom * shutter_angle * shutter_phase / (64800 * obj.zoom * obj.getvalue("zoom")) + 1
@@ -223,41 +224,45 @@ if (chk_display_original) then
 end
 
 if (obj.time == 0) then
-    if (chk_consider_script) then
+    if ((chk_consider_script) and (obj.getoption("camera_mode") ~= 3)) then
         copy_param(tbl, id)
     end
 
     if (v0[1] or not (v0[2] == 0 and v0[3] == 0 and v0[4] == 0 and v0[5] == 0)) then
-        local dx, dy, s_n, d_degree = 0, 0, 1, 0
+        local dx, dy, s_n, d_zoom, dz, d_degree = 0, 0, 1, 0, 0, 0
         if ((not chk_consider_script) and v0[1]) then
             dx = 3 * (obj.getvalue("x", dt) - obj.getvalue("x")) - (obj.getvalue("x", 2 * dt) - obj.getvalue("x"))
             dy = 3 * (obj.getvalue("y", dt) - obj.getvalue("y")) - (obj.getvalue("y", 2 * dt) - obj.getvalue("y"))
-            local s2, s1, s0 = obj.getvalue("zoom", 2 * dt) * 1024 / (1024 + obj.getvalue("z", 2 * dt)), obj.getvalue("zoom", dt) * 1024 / (1024 + obj.getvalue("z", dt)), obj.getvalue("zoom") * 1024 / (1024 + obj.getvalue("z"))
+            local s2, s1, s0 = obj.getvalue("zoom", 2 * dt) * f / (f + obj.getvalue("z", 2 * dt)), obj.getvalue("zoom", dt) * f / (f + obj.getvalue("z", dt)), obj.getvalue("zoom") * f / (f + obj.getvalue("z"))
             s_n = s0 - 3 * (s1 - s0) + (s2 - s0)
+            d_zoom = 3 * (obj.getvalue("zoom", dt) - obj.getvalue("zoom")) - (obj.getvalue("zoom", 2 * dt) - obj.getvalue("zoom"))
+            dz = 3 * (obj.getvalue("z", dt) - obj.getvalue("z")) - (obj.getvalue("z", 2 * dt) - obj.getvalue("z"))
             d_degree = 3 * (obj.getvalue("rz", dt) - obj.getvalue("rz")) - (obj.getvalue("rz", 2 * dt) - obj.getvalue("rz"))
         else
             dx = v0[2] * dt
             dy = v0[3] * dt
-            s_n = obj.getvalue("zoom") * obj.zoom * 1024 / (1024 + obj.getvalue("z") + obj.oz) - v0[4] * dt
+            s_n = obj.getvalue("zoom") * obj.zoom * f / (f + obj.getvalue("z") + obj.oz) - v0[4] * dt
+            d_zoom = v0[4] * dt * (f + obj.getvalue("z")) / f
             d_degree = v0[5] * dt
         end
         rz, d_deg = rotational_blur(tbl, id, d_degree)
         cr, rad_pos = directional_blur(tbl, id, rz, dx, dy)
-        zoom, cz = radial_blur(tbl, id, cr, rad_pos, rz, d_deg, s_n)
+        zoom, cz = radial_blur(tbl, id, cr, rad_pos, rz, d_deg, s_n, d_zoom, dz)
     end
 else
     rz, d_deg = rotational_blur(tbl, id)
     cr, rad_pos = directional_blur(tbl, id, rz)
     zoom, cz = radial_blur(tbl, id, cr, rad_pos, rz, d_deg)
 
-    if (chk_consider_script) then
+    if ((chk_consider_script) and (obj.getoption("camera_mode") ~= 3)) then
         copy_param(tbl, id)
     end
-
-    obj.zoom = obj.zoom * math.max(zoom, 0)
-    obj.rz = obj.rz + rz
-    obj.cx, obj.cy, obj.cz = obj.cx - cr * math.cos(rad_pos - math.rad(obj.rz)), obj.cy - cr * math.sin(rad_pos - math.rad(obj.rz)), obj.cz - cz
 end
+
+obj.zoom = obj.zoom * math.max(zoom, 1e-2)
+obj.rz = obj.rz + rz
+obj.cx, obj.cy, obj.cz = obj.cx - cr * math.cos(rad_pos - math.rad(obj.rz)), obj.cy - cr * math.sin(rad_pos - math.rad(obj.rz)), obj.cz - cz
+
 
 if (chk_display_original) then
     --このスクリプト以降のエフェクトはブラーにかける
@@ -266,7 +271,7 @@ if (chk_display_original) then
     obj.copybuffer("obj", "cache:pre")
     obj.cx, obj.cy, obj.cz = cx, cy, obj.cz + cz
     obj.rz = obj.rz - rz
-    obj.zoom = obj.zoom / math.max(zoom, 1e-10)
+    obj.zoom = obj.zoom / math.max(zoom, 1e-2)
     obj.draw()
 end
 
